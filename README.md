@@ -4,7 +4,7 @@
 
 
 ## Scenario
-In this blog post, we'll demonstrate how to leverage [Azure API Management](https://learn.microsoft.com/en-us/azure/api-management/api-management-key-concepts) to enhance the resiliency and capacity of your [Azure OpenAI Service](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview).  
+In this blog post, I will demonstrate how to leverage [Azure API Management](https://learn.microsoft.com/en-us/azure/api-management/api-management-key-concepts) to enhance the resiliency and capacity of your [Azure OpenAI Service](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview).  
 Azure API Management is a tool that assists in creating, publishing, managing, and securing APIs. It offers features like routing, caching, throttling, authentication, transformation, and more.  
 By utilizing Azure API Management, you can:
 
@@ -12,12 +12,13 @@ By utilizing Azure API Management, you can:
 * Implement the [circuit breaker](https://learn.microsoft.com/en-us/azure/api-management/backends?tabs=bicep#circuit-breaker) pattern to protect your backend service from being overwhelmed by excessive requests. This helps prevent cascading failures and improves the stability and resiliency of your service. You can configure the circuit breaker property in the backend resource and define rules for tripping the circuit breaker, such as the number or percentage of failure conditions within a specified time frame and a range of status codes indicating failures.
 
 ![apim](/readme/diagram-apim.png)
-
+Diagram 1: API Managment with circuit breaker implementation.
 
 > **Important**: Backends in lower priority groups will only be used when all backends in higher priority groups are unavailable because circuit breaker rules are tripped.
 > 
 ![circuit-breaker](/readme/diagram-circuit-breaker.png)
 
+In the following section I will guide you through circuit breaker deployment with API Managment and Open AI
 
 ## Prerequisites
 * If you don't have an [Azure subscription](https://learn.microsoft.com/en-us/azure/guides/developer/azure-developer-guide#understanding-accounts-subscriptions-and-billing), create a [free account](https://azure.microsoft.com/free/?WT.mc_id=A261C142F) before you begin.
@@ -83,6 +84,78 @@ Output:
 > az deployment operation group list --resource-group <resource-group-name> --name apim-deployment --query "[?properties.provisioningState=='Failed']"
 > ```
 
+The following is the [deploy.bicep](/deploy.bicep) backend circuit breaker and load balancer configuration:
+```bicep
+resource apiManagementService 'Microsoft.ApiManagement/service@2023-09-01-preview' existing = {
+  name: apimName
+}
+
+resource backends 'Microsoft.ApiManagement/service/backends@2023-09-01-preview' = [for (name, i) in backendNames: {
+  name: name
+  parent: apiManagementService
+  properties: {
+    url: 'https://${name}.openai.azure.com/openai'
+    protocol: 'http'
+    description: 'Backend for ${name}'
+    type: 'Single'
+    circuitBreaker: {
+      rules: [
+        {
+          acceptRetryAfter: true
+          failureCondition: {
+            count: 1
+            interval: 'PT10S'
+            statusCodeRanges: [
+              {
+                min: 429
+                max: 429
+              }
+              {
+                min: 500
+                max: 503
+              }
+            ]
+          }
+          name: '${name}BreakerRule'
+          tripDuration: 'PT10S'
+        }
+      ]
+    }
+  }
+}]
+```
+And another for the backend pool:
+```bicep
+resource aoailbpool 'Microsoft.ApiManagement/service/backends@2023-09-01-preview' = {
+  name: 'openaiopool'
+  parent: apiManagementService
+  properties: {
+    description: 'Load balance openai instances'
+    type: 'Pool'
+    pool: {
+      services: [
+        {
+          id: '/backends/${backendNames[0]}'
+          priority: 1
+          weight: 1
+        }
+        {
+          id: '/backends/${backendNames[1]}'
+          priority: 2
+          weight: 1
+        }
+        {
+          id: '/backends/${backendNames[2]}'
+          priority: 2
+          weight: 1
+        }
+      ]
+    }
+  }
+}
+```
+
+
 ---
 ## Step II: Create the API Management API
 > **Note**: The following policy can be used in existing APIs or new APIs. the important part is to set the backend service to the backend pool created in the previous step.
@@ -141,9 +214,47 @@ All you need to do is to add the following [set-backend-service](https://learn.m
 > </retry>
 > ```
 
-
-
 ![Add Policy](/readme/policy.png)
+
+The [policy](/policy.xml) is set up to distribute requests across the backend pool and retry requests if the backend service is unavailable:
+```xml
+<policies>
+    <inbound>
+        <base />
+        <set-backend-service id="lb-backend" backend-id="openaiopool" />
+        <azure-openai-token-limit tokens-per-minute="400000" counter-key="@(context.Subscription.Id)" estimate-prompt-tokens="true" tokens-consumed-header-name="consumed-tokens" remaining-tokens-header-name="remaining-tokens" />
+        <authentication-managed-identity resource="https://cognitiveservices.azure.com/" />
+        <azure-openai-emit-token-metric namespace="genaimetrics">
+            <dimension name="Subscription ID" />
+            <dimension name="Client IP" value="@(context.Request.IpAddress)" />
+        </azure-openai-emit-token-metric>
+        <set-variable name="traceId" value="@(Guid.NewGuid().ToString())" />
+        <set-variable name="traceparentHeader" value="@("00" + context.Variables["traceId"] + "-0000000000000000-01")" />
+        <set-header name="traceparent" exists-action="skip">
+            <value>@((string)context.Variables["traceparentHeader"])</value>
+        </set-header>
+    </inbound>
+    <backend>
+        <retry condition="@(context.Response.StatusCode == 429)" count="3" interval="1" first-fast-retry="true">
+            <forward-request buffer-request-body="true" />
+        </retry>
+    </backend>
+    <outbound>
+        <base />
+        <set-header name="backend-host" exists-action="skip">
+            <value>@(context.Request.Url.Host)</value>
+        </set-header>
+        <set-status code="@(context.Response.StatusCode)" reason="@(context.Response.StatusReason)" />
+    </outbound>
+    <on-error>
+        <base />
+        <set-header name="backend-host" exists-action="skip">
+            <value>@(context.LastError.Reason)</value>
+        </set-header>
+        <set-status code="@(context.Response.StatusCode)" reason="@(context.LastError.Message)" />
+    </on-error>
+</policies>
+```
 
 ---
 ## Step III: Cofigure Monitoring
@@ -227,43 +338,22 @@ ApiManagementGatewayLogs
 
 
 ## Conclusion
+In conclusion, leveraging Azure API Management significantly enhances the resiliency and capacity of Azure OpenAI service by distributing requests across multiple instances and implementing load-balancer with retry/circuit-breaker patterns.  
+These strategies improve service availability, performance, and stability. To read more look in [Backends in API Management](https://learn.microsoft.com/en-us/azure/api-management/backends?tabs=bicep).
+
 
 ## References
 
 #### Azure API Management
-[Quickstart: Create a new Azure API Management instance by using the Azure CLI](https://learn.microsoft.com/en-us/azure/api-management/get-started-create-service-instance-cli)  
-[Tutorial: Import and publish your first API](https://learn.microsoft.com/en-us/azure/api-management/import-and-publish)  
 [Azure API Management terminology](https://learn.microsoft.com/en-us/azure/api-management/api-management-terminology)  
 [API Management policy reference](https://learn.microsoft.com/en-us/azure/api-management/api-management-policies)  
 [API Management policy expressions](https://learn.microsoft.com/en-us/azure/api-management/api-management-policy-expressions)  
 [Backends in API Management](https://learn.microsoft.com/en-us/azure/api-management/backends?tabs=bicep)  
-[Microsoft.ApiManagement service/backends 2023-09-01-preview](https://learn.microsoft.com/en-us/azure/templates/microsoft.apimanagement/2023-09-01-preview/service/backends?pivots=deployment-language-bicep)  
-[Set backend service](https://learn.microsoft.com/en-us/azure/api-management/set-backend-service-policy)  
 [Error handling in API Management policies](https://learn.microsoft.com/en-us/azure/api-management/api-management-error-handling-policies)  
 
 #### Azure OpenAI
-[Create and deploy an Azure OpenAI Service resource](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/create-resource?pivots=web-portal)  
-[Azure OpenAI Service REST API reference](https://learn.microsoft.com/en-us/azure/ai-services/openai/reference)  
 [Azure OpenAI deployment types](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/deployment-types)  
-[Role-based access control for Azure OpenAI Service](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/role-based-access-control)  
 [Azure OpenAI Service quotas and limits](https://learn.microsoft.com/en-us/azure/ai-services/openai/quotas-limits)  
-[Cognitive Services Data Reader (Preview) role](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/ai-machine-learning#cognitive-services-data-reader-preview)  
-
-#### IaC
-[Create parameters files for Bicep deployment](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/parameter-files?tabs=Bicep)  
-[az bicep install](https://learn.microsoft.com/en-us/cli/azure/bicep?view=azure-cli-latest#az-bicep-install)  
-[az bicep upgrade](https://learn.microsoft.com/en-us/cli/azure/bicep?view=azure-cli-latest#az-bicep-upgrade)  
-[Microsoft.ApiManagement service/backends](https://learn.microsoft.com/en-us/azure/templates/microsoft.apimanagement/service/backends?pivots=deployment-language-bicep)  
-[Microsoft.ApiManagement service](https://learn.microsoft.com/en-us/azure/templates/microsoft.apimanagement/service?pivots=deployment-language-bicep)  
-[az deployment group create](https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest#az-deployment-group-create)  
-[az deployment group](https://learn.microsoft.com/en-us/cli/azure/deployment/group?view=azure-cli-latest)  
-[View deployment history with Azure Resource Manager](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deployment-history?tabs=azure-cli#deployment-operations-and-error-message)  
 
 #### Azure Tech Community
 [AI Hub Gateway Landing Zone accelerator](https://github.com/Azure-Samples/ai-hub-gateway-solution-accelerator)
-[Leverage Azure API Management to distribute API traffic to multiple backend services](https://techcommunity.microsoft.com/t5/azure-architecture-blog/leverage-azure-api-management-to-distribute-api-traffic-to/ba-p/4041813)  
-[Using Azure API Management Circuit Breaker and Load balancing with Azure OpenAI Service](https://techcommunity.microsoft.com/t5/fasttrack-for-azure/using-azure-api-management-circuit-breaker-and-load-balancing/ba-p/4041003)  
-
-#### Miscellaneous
-[traceparent header](https://www.w3.org/TR/trace-context/#traceparent-header)  
-[Retry request ends with "Content length mismatch"](https://stackoverflow.com/questions/54648853/retry-request-ends-with-content-length-mismatch)  

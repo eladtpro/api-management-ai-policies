@@ -2,6 +2,7 @@ import concurrent.futures
 import requests
 import argparse
 import time
+import datetime
 from colorama import Fore, Style, init
 import os
 
@@ -85,7 +86,10 @@ def main():
     start_time = time.time()
     request_count = 0
     time_window = 10  # Time window in seconds
-    request_limit = 20  # Request limit per time window 3*50 = 150, 150/6 = 25
+    request_limit = args.request_limit  # Request limit per time window 3*50 = 150, 150/6 = 25
+
+    formatted_start_time = datetime.datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')
+    print(f'{Fore.CYAN}Starting {formatted_start_time} {total_requests} requests with {batch_size} workers. Time window: {time_window} seconds. Request limit: {request_limit}, Max tokens: {max_tokens}, APIM: {apim_name}')
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
         for i in range(0, total_requests, batch_size):
@@ -122,6 +126,7 @@ def main():
                     print(f'{Fore.GREEN}# {result["index"]}: {result["status_code"]}, Backend: {result["backend_host"]}, Remaining(T): {result["remaining_tokens"]}, Consumed: {result["consumed_tokens"]}, Remaining(R): {result["remaining_requests"]}, Reason: {result["status_reason"]}')
                 except Exception as e:
                     print(f'{Fore.RED}Request {index} generated an exception: {e}')
+    print(f'{Fore.CYAN}All requests completed. Total time: {time.time() - start_time}')
 
 if __name__ == '__main__':
     main()
