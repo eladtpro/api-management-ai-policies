@@ -11,12 +11,12 @@ By utilizing Azure API Management, you can:
 * Distribute requests across multiple instances of the Azure OpenAI Service using the [priority-based load balancing technique](https://learn.microsoft.com/en-us/azure/api-management/backends?tabs=bicep#load-balanced-pool), which includes groups with weight distribution inside the group. This helps spread the load across various resources and regions, thereby enhancing the availability and performance of your service.
 * Implement the [circuit breaker](https://learn.microsoft.com/en-us/azure/api-management/backends?tabs=bicep#circuit-breaker) pattern to protect your backend service from being overwhelmed by excessive requests. This helps prevent cascading failures and improves the stability and resiliency of your service. You can configure the circuit breaker property in the backend resource and define rules for tripping the circuit breaker, such as the number or percentage of failure conditions within a specified time frame and a range of status codes indicating failures.
 
-![apim](/readme/diagram-apim.png)
+![apim](/readme/diagram-apim.png)  
 Diagram 1: API Managment with circuit breaker implementation.
 
 > **Important**: Backends in lower priority groups will only be used when all backends in higher priority groups are unavailable because circuit breaker rules are tripped.
 > 
-![circuit-breaker](/readme/diagram-circuit-breaker.png)
+![circuit-breaker](/readme/diagram-circuit-breaker.png)  
 Diagram 2: API Managment with circuit breaker in action.
 In the following section I will guide you through circuit breaker deployment with API Managment and Open AI
 
@@ -324,6 +324,7 @@ python main.py --apim-name apim-ai-features --subscription-key APIM_SUBSCRIPTION
   
 > **Note**: You can adjust the values of `--batch_size` and `--total_requests` as needed. If you omit them, the script will use the default values specified in the argparse configuration.
 
+![Testing Window](/readme/testing-green.png)
 
 #### Test Results:
 ```kql
