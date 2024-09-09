@@ -20,7 +20,7 @@ Diagram 1: API Managment with circuit breaker implementation.
 Diagram 2: API Managment with circuit breaker in action.  
 
 ---
-In the following section I will guide you through circuit breaker deployment with API Managment and Open AI services. you can use the same solution with native OpenAI service.
+In the following section I will guide you through circuit breaker deployment with API Managment and Azure Open AI services. you can use the same solution with native OpenAI service.
 
 ## Prerequisites
 * If you don't have an [Azure subscription](https://learn.microsoft.com/en-us/azure/guides/developer/azure-developer-guide#understanding-accounts-subscriptions-and-billing), create a [free account](https://azure.microsoft.com/free/?WT.mc_id=A261C142F) before you begin.
