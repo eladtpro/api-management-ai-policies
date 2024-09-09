@@ -17,7 +17,7 @@ Diagram 1: API Managment with circuit breaker implementation.
 > **Important**: Backends in lower priority groups will only be used when all backends in higher priority groups are unavailable because circuit breaker rules are tripped.
 > 
 ![circuit-breaker](/readme/diagram-circuit-breaker.png)
-
+Diagram 2: API Managment with circuit breaker in action.
 In the following section I will guide you through circuit breaker deployment with API Managment and Open AI
 
 ## Prerequisites
@@ -43,7 +43,7 @@ Login to Azure.
 az login
 ```
 
-> **Important**: Update the name of the backend services in the [deploy.bicep](/deploy.bicep) file.  
+> **Important**: Update the names of the backend services in the [deploy.bicep](/deploy.bicep) file.  
 
 Create a deployment at resource group from a remote template file, update the parameters in the file.
 ```bash
